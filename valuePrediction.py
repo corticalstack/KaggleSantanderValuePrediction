@@ -78,7 +78,6 @@ df_test = np.log1p(df_test)
 
 gc.collect()
 
-
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import GradientBoostingRegressor
 
