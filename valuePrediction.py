@@ -1,26 +1,31 @@
 # Jon-Paul Boyd - Kaggle - Santander Customer Value Prediction 
 # Importing the libraries
-import sys
 import gc
-import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-from scipy.stats import norm
-from scipy import stats
-import seaborn as sns
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.grid_search import ParameterGrid
-from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold
-from sklearn.linear_model import Ridge, RidgeCV, ElasticNet, LassoCV, LassoLarsCV
+from sklearn.linear_model import Lasso
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
+import lightgbm as lgb
+
 
 def handle_missing(df):
-    
     # Delete any column containing only 0's
     df = df.loc[:, (df != 0).any(axis=0)]
-    df.fillna(0, inplace=True)
     
+    # Impute nan with 0
+    df.fillna(0, inplace=True)    
     return df
+
+def add_stats(df):
+    df['median'] = df.median(axis=1)
+    df['mean'] = df.mean(axis=1)
+    df['sum'] = df.sum(axis=1)
+    df['std'] = df.std(axis=1)
+    df['kur'] = df.kurtosis(axis=1)    
+    return df
+
 
 def get_selected_features():
     return [
@@ -48,54 +53,36 @@ def get_selected_features():
 df_train = pd.read_csv('train.csv')
 df_test = pd.read_csv('test.csv')
 
-corrmat = df_train.corr()
-f, ax = plt.subplots(figsize=(12, 9))
-sns.heatmap(corrmat, vmax=.8, square=True)
-k = 30 #number of variables for heatmap
-cols = corrmat.nlargest(k, 'target')['target'].index
-cm = np.corrcoef(df_train[cols].values.T)
-sns.set(font_scale=1.25)
-hm = sns.heatmap(cm, cbar=True, annot=True, square=True, fmt='.2f', annot_kws={'size': 10}, yticklabels=cols.values, xticklabels=cols.values)
-plt.show()
-
-cols = cols.drop(['target'])
-
+df_train = handle_missing(df_train)
 y = np.log1p(df_train.target)
 
-## Possibly try a non-linear version of PCA - check thge udemy course ?????
+#corrmat = df_train.corr()
+#k = 500 #number of variables for heatmap
+#cols = corrmat.nlargest(k, 'target')['target'].index 
+#cols = cols.drop(['target'])
+
 cols = get_selected_features()
 
 df_train = df_train[cols]    
-df_train = handle_missing(df_train)
+df_train = add_stats(df_train)
 
+cols = get_selected_features()
 id_test = df_test.ID
-df_test = df_test[cols]    
 df_test = handle_missing(df_test)
+df_test = df_test[cols]    
+df_test = add_stats(df_test)
 
-
-df_train = np.log1p(df_train)
-df_test = np.log1p(df_test)
-
+# Garbage collect
 gc.collect()
 
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.ensemble import GradientBoostingRegressor
-
-from sklearn.kernel_ridge import KernelRidge
-
-
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import RobustScaler
-from sklearn.linear_model import Lasso
 
 # Convert train to numpy array and delete index column
 X = np.array(df_train)
 X = np.delete(X, 0, axis=1)
 
-test_errors_regr_lasso = []
-test_errors_regr_ridge = []
 test_errors_regr_gbr = []
-test_errors_regr_enet = []
+test_errors_regr_lgb = []
+test_errors_regr_rf = []
 test_errors_regr_lasso_stacked = []
 
 nFolds = 20
@@ -111,20 +98,7 @@ for train_index, test_index in kf.split(X):
     X_train, X_test = X[train_index], X[test_index]
     y_train, y_test = y[train_index], y[test_index]
     
-    # lasso
-    regr_lasso = make_pipeline(RobustScaler(), Lasso(alpha = 0.0003, random_state=1, max_iter=50000))
-    regr_lasso.fit(X_train, y_train)
-    regr_lasso_train_pred = regr_lasso.predict(X_train)
-    regr_lasso_test_pred = regr_lasso.predict(X_test)
-
-
-    # Ridge
-    regr_ridge = Ridge(alpha=9.0, fit_intercept = True)
-    regr_ridge.fit(X_train, y_train)
-    regr_ridge_train_pred = regr_ridge.predict(X_train)
-    regr_ridge_test_pred = regr_ridge.predict(X_test)
-
-
+    
     # Gradient Boosting    
     regr_gbr = GradientBoostingRegressor(n_estimators=3000, learning_rate=0.02,
                                           max_depth=4, max_features='sqrt',
@@ -133,22 +107,41 @@ for train_index, test_index in kf.split(X):
     regr_gbr.fit(X_train, y_train)
     regr_gbr_train_pred = regr_gbr.predict(X_train)
     regr_gbr_test_pred = regr_gbr.predict(X_test)
-        
-       
-    # Elastic Net
-    regr_enet = make_pipeline(RobustScaler(), ElasticNet(alpha=4.0, l1_ratio=0.005, random_state=3))
-    regr_enet.fit(X_train, y_train)
-    regr_enet_train_pred = regr_enet.predict(X_train) 
-    regr_enet_test_pred = regr_enet.predict(X_test) 
+
     
+    # Light gradient boost
+    regr_lgb = lgb.LGBMRegressor(objective = 'regression',
+        num_leaves= 58,
+        subsample = 0.6143,
+        colsample_bytree = 0.6453,
+        min_split_gain = np.power(10, -2.5988),
+        reg_alpha = np.power(10, -2.2887),
+        reg_lambda = np.power(10, 1.7570),
+        min_child_weight = np.power(10, -0.1477),
+        verbose = -1,
+        seed = 3,
+        boosting_type = 'gbdt',
+        max_depth = -1,
+        learning_rate = 0.05,
+        metric = 'l2')
+    regr_lgb.fit(X_train, y_train)
+    regr_lgb_train_pred = regr_lgb.predict(X_train)
+    regr_lgb_test_pred = regr_lgb.predict(X_test)           
+       
+    
+    # Random Forest regressor    
+    regr_rf = RandomForestRegressor(n_estimators = 500, random_state = 0)
+    regr_rf.fit(X_train, y_train)
+    regr_rf_train_pred = regr_gbr.predict(X_train)
+    regr_rf_test_pred = regr_gbr.predict(X_test)
         
+    
     # Stacking
     stacked_set = pd.DataFrame({'A' : []})
-    stacked_set = pd.concat([stacked_set, pd.DataFrame(regr_lasso_test_pred)], axis=1)
-    stacked_set = pd.concat([stacked_set, pd.DataFrame(regr_ridge_test_pred)], axis=1)
     stacked_set = pd.concat([stacked_set, pd.DataFrame(regr_gbr_test_pred)], axis=1) 
-    stacked_set = pd.concat([stacked_set, pd.DataFrame(regr_enet_test_pred)], axis=1)
-    product = (regr_lasso_test_pred*regr_ridge_test_pred*regr_gbr_test_pred*regr_enet_test_pred) ** (1.0/4.0)
+    stacked_set = pd.concat([stacked_set, pd.DataFrame(regr_rf_test_pred)], axis=1)
+    stacked_set = pd.concat([stacked_set, pd.DataFrame(regr_lgb_test_pred)], axis=1)
+    product = (regr_gbr_test_pred*regr_lgb_test_pred*regr_rf_test_pred) ** (1.0/3.0)
     stacked_set = pd.concat([stacked_set, pd.DataFrame(product)], axis=1)
     Xstack = np.array(stacked_set)
     Xstack = np.delete(Xstack, 0, axis=1)
@@ -156,20 +149,17 @@ for train_index, test_index in kf.split(X):
     regr_lasso_stacked.fit(Xstack, y_test)
     regr_lasso_stacked_Xstack_pred = regr_lasso_stacked.predict(Xstack)
     
-    models.append([regr_ridge, regr_lasso, regr_gbr, regr_enet, regr_lasso_stacked])
-    #models.append([regr_ridge, regr_lasso, regr_gbr, regr_enet])
+    models.append([regr_gbr, regr_lgb, regr_rf, regr_lasso_stacked])
     
-    test_errors_regr_lasso.append(np.square(regr_lasso_test_pred - y_test).mean() ** 0.5)
-    test_errors_regr_ridge.append(np.square(regr_ridge_test_pred - y_test).mean() ** 0.5)
     test_errors_regr_gbr.append(np.square(regr_gbr_test_pred - y_test).mean() ** 0.5)
-    test_errors_regr_enet.append(np.square(regr_enet_test_pred - y_test).mean() ** 0.5)
+    test_errors_regr_lgb.append(np.square(regr_lgb_test_pred - y_test).mean() ** 0.5)
+    test_errors_regr_rf.append(np.square(regr_rf_test_pred - y_test).mean() ** 0.5)
     test_errors_regr_lasso_stacked.append(np.square(regr_lasso_stacked_Xstack_pred - y_test).mean() ** 0.5)
 
 
-print('Lasso test error: ', np.mean(test_errors_regr_lasso))
-print('Ridge test error: ', np.mean(test_errors_regr_ridge))
 print('Gradient Boosting test error: ', np.mean(test_errors_regr_gbr))
-print('Elastic Net test error: ', np.mean(test_errors_regr_enet))
+print('LGB test error: ', np.mean(test_errors_regr_lgb))
+print('Random Forest test error: ', np.mean(test_errors_regr_rf))
 print('Lasso stacked test error: ', np.mean(test_errors_regr_lasso_stacked))
 
 
@@ -180,24 +170,21 @@ M = X_score.shape[0]
 scores_final = 1+np.zeros(M)
 
 for model in models:
-    model_lasso = model[0]
-    model_ridge = model[1]
-    model_gbr = model[2]
-    model_enet = model[3]
-    model_lasso_stacked = model[4]
+    model_gbr = model[0]
+    model_lgb = model[1]
+    model_rf = model[2]
+    model_lasso_stacked = model[3]
     
-    model_lasso_scores = model_lasso.predict(X_score)
-    model_ridge_scores = model_ridge.predict(X_score)
     model_gbr_scores = model_gbr.predict(X_score)
-    model_enet_scores = model_enet.predict(X_score)
+    model_lgb_scores = model_lgb.predict(X_score)
+    model_rf_scores = model_rf.predict(X_score)
     
     stacked_sets = pd.DataFrame({'A' : []})
-    stacked_sets = pd.concat([stacked_sets, pd.DataFrame(model_lasso_scores)],axis=1)
-    stacked_sets = pd.concat([stacked_sets, pd.DataFrame(model_ridge_scores)],axis=1)
     stacked_sets = pd.concat([stacked_sets, pd.DataFrame(model_gbr_scores)],axis=1)
-    stacked_sets = pd.concat([stacked_sets, pd.DataFrame(model_enet_scores)],axis=1)
+    stacked_sets = pd.concat([stacked_sets, pd.DataFrame(model_lgb_scores)],axis=1)
+    stacked_sets = pd.concat([stacked_sets, pd.DataFrame(model_rf_scores)],axis=1)
     
-    product = (model_lasso_scores*model_ridge_scores*model_gbr_scores*model_enet_scores) ** (1.0/4.0)
+    product = (model_gbr_scores*model_lgb_scores*model_rf_scores) ** (1.0/3.0)
     stacked_sets = pd.concat([stacked_sets, pd.DataFrame(product)], axis=1)    
     Xstacks = np.array(stacked_sets)
     Xstacks = np.delete(Xstacks, 0, axis=1)
@@ -210,4 +197,3 @@ scores_final = scores_final ** (1/nFolds)
 fin_score = pd.DataFrame({'target': np.exp(scores_final)-1})
 fin_data = pd.concat([id_test, fin_score],axis=1)
 fin_data.to_csv('test_set_prediction.csv', sep=',', index = False)
-      
